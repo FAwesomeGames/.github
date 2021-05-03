@@ -1,0 +1,6 @@
+{
+  "name": "Dokku",
+  "description": "Build a Docker image and deploy it to Dokku.",
+  "iconName": "docker",
+  "categories": ["Dockerfile"]
+}

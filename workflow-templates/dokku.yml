@@ -1,0 +1,82 @@
+name: Dokku CI
+
+on:
+  push:
+    branches: [$default-branch]
+
+jobs:
+  deploy:
+   runs-on: ubuntu-latest
+
+   # Configure your application here
+   env:
+     name: app_name # Dokku app name
+     context: .     # Dockerfile path
+     tag: latest    # Docker image tag
+
+   # Don't forget to configure thest GitHub secrets:
+   # - SSH_HOST
+   # - SSH_USERNAME
+   # - SSH_KEY
+
+   steps:
+      - name: Clone repository
+        uses: actions/checkout@v2
+
+      - name: Set environment variables
+        run: |
+          OWNER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          DOCKER_IMAGE=ghcr.io/${OWNER}/${{ env.name }}
+          echo "app_name=${{ env.name }}" >> $GITHUB_ENV
+          echo "docker_tag=${DOCKER_IMAGE}:${{ env.tag }}" >> $GITHUB_ENV
+          echo "docker_cache_path=/tmp/.buildx-cache" >> $GITHUB_ENV
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Cache Docker layers
+        uses: actions/cache@v2
+        with:
+          path: ${{ env.docker_cache_path }}
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-buildx-
+
+      - name: Build and push Docker image to GitHub Container Registry
+        id: docker_build
+        uses: docker/build-push-action@v2
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: ${{ env.context }}
+          push: true
+          tags: ${{ env.docker_tag }}
+          cache-from: type=local,src=${{ env.docker_cache_path }}
+          cache-to: type=local,dest=${{ env.docker_cache_path }}
+          secrets: |
+            npm_token=${{ secrets.NPM_TOKEN }}
+
+      - name: Image digest
+        run: echo ${{ steps.docker_build.outputs.digest }}
+
+      - name: Deploy to Dokku
+        uses: appleboy/ssh-action@v0.1.4
+        env:
+          IMAGE_TAG: ${{ env.docker_tag }}
+          APP_NAME: ${{ env.app_name }}
+          APP_TAG: ${{ env.tag }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          envs: IMAGE_TAG,APP_NAME,APP_TAG
+          script: |
+            sudo docker pull $IMAGE_TAG
+            sudo docker tag $IMAGE_TAG dokku/$APP_NAME:$APP_TAG
+            dokku tags:deploy $APP_NAME $APP_TAG
